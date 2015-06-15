@@ -46,14 +46,14 @@
             
             # Retreive current branch or tag and clean-up git output
             # Are we using a valid branch?
-            $currentBranch = (ExecGit "symbolic-ref --short -q HEAD")
+            $currentBranch = (ExecGit "symbolic-ref --short -q HEAD").trim()
             
             # Check if branch is empty, which means that the repository is in detached state (cloned from a tag rather than a branch?)
             if ([string]::IsNullOrEmpty($currentBranch))
             {
                 # Search for a tab based on the current commit
                 $currentCommit = (ExecGit "rev-parse HEAD").Trim()
-                $currentBranch = (ExecGit "tag --contains $currentCommit")
+                $currentBranch = (ExecGit "tag --contains $currentCommit").Trim()
                 if ([string]::IsNullOrEmpty($currentBranch))
                 {
                     $currentBranch = $null
