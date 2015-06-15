@@ -44,9 +44,30 @@
             Set-Location $RepoPath
             $ensureResult = "Present"
             
-            # Retreive current branch and clean-up git output
-            $currentBranch = (ExecGit "rev-parse --abbrev-ref HEAD").split()[0]
-            Write-Verbose "Repo branch set to `"$currentBranch`""
+            # Retreive current branch or tag and clean-up git output
+            # Are we using a valid branch?
+            $currentBranch = (ExecGit "symbolic-ref --short -q HEAD")
+            
+            # Check if branch is empty, which means that the repository is in detached state (cloned from a tag rather than a branch?)
+            if ([string]::IsNullOrEmpty($currentBranch))
+            {
+                # Search for a tab based on the current commit
+                $currentCommit = (ExecGit "rev-parse HEAD").Trim()
+                $currentBranch = (ExecGit "tag --contains $currentCommit")
+                if ([string]::IsNullOrEmpty($currentBranch))
+                {
+                    $currentBranch = $null
+                    Write-Verbose "Failed to detect current branch or tag!"
+                }
+                else
+                {
+                    Write-Verbose "Repo set to `"$currentBranch`" tag"
+                }
+            }
+            else
+            {
+                Write-Verbose "Repo branch set to `"$currentBranch`""
+            }
 
             # Retrieve current repo origin fetch settings
             # Split output by line; find one that is listed as (fetch); split by space and list just origin URI
