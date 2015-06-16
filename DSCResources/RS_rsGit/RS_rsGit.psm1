@@ -413,7 +413,7 @@ function Test-TargetResource
                 {
                     # Check if origin contains changes which have not been merged locally
                     $Fetch = ExecGit "fetch origin"
-                    if ($Fetch.Length -ne 0)
+                    if ( -not [string]::IsNullOrEmpty($Fetch))
                     {
                         Write-Verbose "origin/$Branch has pending updates:`n$Fetch"
                         if($Logging -eq $true) 
@@ -422,10 +422,44 @@ function Test-TargetResource
                         }
                         return $false
                     }
+
+                    # Retreive current branch and clean-up git output
+                    $currentBranch = (ExecGit "symbolic-ref --short -q HEAD").Trim()
                     
+                    # Check if repo is in detached state (cloned from a tag rather than a branch?)
+                    if ([string]::IsNullOrEmpty($currentBranch))
+                    {
+                        # Search for a tag based on the current local commit
+                        $currentCommit = (ExecGit "rev-parse HEAD").Trim()
+                        $currentBranch = (ExecGit "tag --contains $currentCommit").Trim()
+                        if ([string]::IsNullOrEmpty($currentBranch))
+                        {
+                            Write-Verbose "Failed to detect current branch or tag!"
+                            return $false
+                        }
+                        else
+                        {
+                            Write-Verbose "Repo is cloned from `"$currentBranch`" tag"
+                            $isTagged = $true
+                        }
+                    }
+                    else
+                    {
+                        Write-Verbose "Repo branch set to `"$currentBranch`""
+                        $isTagged = $false
+                    }
+
                     # Ensure that local and remote commits match after a fetch operation has been made
-                    $localCommit = ExecGit "rev-parse HEAD"
-                    $originCommit = ExecGit "rev-parse origin/$Branch"
+                    $localCommit = (ExecGit "rev-parse HEAD").Trim()
+                    
+                    if ($isTagged)
+                    {
+                        $originCommit = (ExecGit "rev-parse refs/tags/$currentBranch").Trim()
+                    }
+                    else
+                    {
+                        $originCommit = (ExecGit "rev-parse origin/$currentBranch").Trim()
+                    }
 
                     if (-not ($localCommit -eq $originCommit))
                     {
