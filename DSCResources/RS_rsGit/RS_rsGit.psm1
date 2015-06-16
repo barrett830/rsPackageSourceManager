@@ -44,34 +44,10 @@
             Set-Location $RepoPath
             $ensureResult = "Present"
             
-            # Retreive current branch or tag and clean-up git output
-            # Are we using a valid branch?
-            $currentBranch = (ExecGit "symbolic-ref --short -q HEAD").trim()
-            
-            # Check if branch is empty, which means that the repository is in detached state (cloned from a tag rather than a branch?)
-            if ([string]::IsNullOrEmpty($currentBranch))
-            {
-                # Search for a tab based on the current commit
-                $currentCommit = (ExecGit "rev-parse HEAD").Trim()
-                $currentBranch = (ExecGit "tag --contains $currentCommit").Trim()
-                if ([string]::IsNullOrEmpty($currentBranch))
-                {
-                    $currentBranch = $null
-                    Write-Verbose "Failed to detect current branch or tag!"
-                }
-                else
-                {
-                    Write-Verbose "Repo set to `"$currentBranch`" tag"
-                }
-            }
-            else
-            {
-                Write-Verbose "Repo branch set to `"$currentBranch`""
-            }
+            $RepoState = RepoState -RepoPath $RepoPath -Branch $Branch
 
-            # Retrieve current repo origin fetch settings
-            # Split output by line; find one that is listed as (fetch); split by space and list just origin URI
-            $SourceResult = (((ExecGit -args "remote -v").Split("`n") | Where-Object { $_.contains("(fetch)") }) -split "\s+")[1]
+            $currentBranch = $RepoState.Branch
+            $SourceResult = $RepoState.Source
 
             if (-not ([String]::IsNullOrEmpty($DestinationZip)))
             {
@@ -162,41 +138,7 @@ function Set-TargetResource
     $RepoPath = (SetRepoPath -Source $Source -Destination $Destination)
     
     if ($Ensure -eq "Present")
-    {
-        <# Disabling Browser service - need to check if this is needed
-        if ((Get-Service "Browser").status -eq "Stopped" ) 
-        {
-            Get-Job | ? State -match "Completed" | Remove-Job
-            $startmode = (Get-WmiObject -Query "Select StartMode From Win32_Service Where Name='browser'").startmode
-
-            if ( $startmode -eq 'disabled' )
-            {
-                Set-Service -Name Browser -StartupType Manual 
-            }
-
-            Write-Verbose "Starting Browser Service"
-            if($Logging -eq $true) 
-            {
-                Write-EventLog -LogName DevOps -Source $myLogSource -EntryType Information -EventId 1000 -Message ("Starting Browser Service")
-            }
-            Start-Service Browser
- 
-            if ( (Get-Job "Stop_Browser" -ErrorAction SilentlyContinue).count -eq 0 )
-            {
-                Write-Verbose "Creating PSJob to Stop Browser Service"
-                if($Logging -eq $true) 
-                {
-                    Write-EventLog -LogName DevOps -Source $myLogSource -EntryType Information -EventId 1000 -Message ("Creating PSJob to Stop Browser Service")
-                }
-                Start-Job -Name "Stop_Browser" -ScriptBlock 
-                {
-                    Start-Sleep -Seconds 60
-                    Stop-Service Browser
-                }
-            }
-        }
-        #>
-        
+    {        
         $GetResult = (Get-TargetResource -Ensure $Ensure -Source $Source -Destination $Destination -Branch $Branch -Name $Name)
         
         # Retrieve any changes, which have not been merged locally
@@ -423,45 +365,18 @@ function Test-TargetResource
                         return $false
                     }
 
-                    # Retreive current branch and clean-up git output
-                    $currentBranch = (ExecGit "symbolic-ref --short -q HEAD").Trim()
-                    
-                    # Check if repo is in detached state (cloned from a tag rather than a branch?)
-                    if ([string]::IsNullOrEmpty($currentBranch))
+                    $RepoState = RepoState -RepoPath $RepoPath -Branch $Branch
+
+                    if ($RepoState.IsTagged)
                     {
-                        # Search for a tag based on the current local commit
-                        $currentCommit = (ExecGit "rev-parse HEAD").Trim()
-                        $currentBranch = (ExecGit "tag --contains $currentCommit").Trim()
-                        if ([string]::IsNullOrEmpty($currentBranch))
-                        {
-                            Write-Verbose "Failed to detect current branch or tag!"
-                            return $false
-                        }
-                        else
-                        {
-                            Write-Verbose "Repo is cloned from `"$currentBranch`" tag"
-                            $isTagged = $true
-                        }
+                        $originCommit = (ExecGit "rev-parse refs/tags/$Branch").Trim()
                     }
                     else
                     {
-                        Write-Verbose "Repo branch set to `"$currentBranch`""
-                        $isTagged = $false
+                        $originCommit = (ExecGit "rev-parse origin/$Branch").Trim()
                     }
 
-                    # Ensure that local and remote commits match after a fetch operation has been made
-                    $localCommit = (ExecGit "rev-parse HEAD").Trim()
-                    
-                    if ($isTagged)
-                    {
-                        $originCommit = (ExecGit "rev-parse refs/tags/$currentBranch").Trim()
-                    }
-                    else
-                    {
-                        $originCommit = (ExecGit "rev-parse origin/$currentBranch").Trim()
-                    }
-
-                    if (-not ($localCommit -eq $originCommit))
+                    if (-not ($RepoState.CurrentCommit -eq $originCommit))
                     {
                         Write-Verbose "Latest local commit does not match origin/$Branch"
                         if($Logging -eq $true) 
@@ -693,6 +608,61 @@ function IsValidRepo
     {
         return $false
     }
+}
+
+function RepoState
+{
+    [CmdletBinding()]
+    param (
+        [string]$RepoPath,
+        [string]$Branch
+    )
+    
+    if (-not (IsValidRepo -RepoPath $RepoPath))
+    {
+        Throw "Invalid repo path passed to 'RepoState' function."
+    }
+
+    # Retrieve current repo origin fetch settings
+    # Split output by line; find one that is listed as (fetch); split by space and list just origin URI
+    $Source = (((ExecGit -args "remote -v").Split("`n") | Where-Object { $_.contains("(fetch)") }) -split "\s+")[1]
+
+    # Retreive current branch or tag and clean-up git output
+    # Are we using a valid branch?
+    $currentBranch = (ExecGit "symbolic-ref --short -q HEAD").trim()
+    $currentCommit = (ExecGit "rev-parse HEAD").Trim()
+
+    # Check if branch is empty, which means that the repository is in detached state
+    if ([string]::IsNullOrEmpty($currentBranch))
+    {
+        # Search for a tag based on the current commit
+        $currentBranch = (ExecGit "tag --contains $currentCommit").Trim()
+        if ($currentBranch.Contains($Branch))
+        {
+            $currentBranch = $Branch
+            Write-Verbose "Repo set to `"$Branch`" tag"
+            $IsTagged = $true
+        }
+        else
+        {
+            $Branch = $null
+            Write-Verbose "Failed to detect current branch or tag!"
+            $IsTagged = $false
+        }
+    }
+    else
+    {
+        Write-Verbose "Repo branch set to `"$currentBranch`""
+        $IsTagged = $false
+
+    }
+    
+    return @{
+            IsTagged = $IsTagged
+            Branch = $Branch
+            CurrentCommit = $currentCommit
+            Source = $Source
+            }
 }
 
 Export-ModuleMember -Function *-TargetResource
